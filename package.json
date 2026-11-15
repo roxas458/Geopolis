@@ -1,0 +1,30 @@
+{
+  "name": "geopolis",
+  "version": "3.0.0",
+  "description": "Geopolis — геополитический симулятор в браузере (1936, HOI4-стиль, по дням, мультиплеер)",
+  "main": "server.js",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "geopolitics",
+    "simulator",
+    "game",
+    "browser",
+    "express",
+    "socket.io",
+    "multiplayer"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
