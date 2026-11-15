@@ -1,5 +1,5 @@
 // ============================================================
-// SERVER.JS — Express + Socket.IO (v3.13, D+C)
+// SERVER.JS — Express + Socket.IO (v3.15, D+C)
 // Точка входа. Отдаёт public/ + обрабатывает Socket.IO.
 // ============================================================
 import express from 'express';
@@ -37,8 +37,9 @@ function withCb(fn) {
 // ============================================================
 app.use(express.static('public'));
 
+// v3.15: health-check с версией и uptime (для Render)
 app.get('/health', (req, res) => {
-  res.json({ ok: true, rooms: listRooms().length });
+  res.json({ ok: true, rooms: listRooms().length, version: '3.15', uptime: process.uptime() });
 });
 
 // ============================================================
@@ -137,7 +138,6 @@ io.on('connection', (socket) => {
       if (!r.ok) return cb(r);
 
       room.broadcastState(io);
-      // FIX: добавляем code — клиент (lobby.js) ждёт его в __onMultiplayerStart
       io.to(room.code).emit('room:started', { started: true, speed: room.speed, code: room.code });
       io.to(room.code).emit('room:update', room.toJSON());
       cb({ ok: true, room: room.toJSON() });
@@ -294,7 +294,8 @@ setInterval(() => {
 // ============================================================
 // ЗАПУСК
 // ============================================================
-httpServer.listen(PORT, () => {
-  console.log(`[Geopolis] server on http://localhost:${PORT}`);
+// v3.15: '0.0.0.0' — обязательно для Render
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`[Geopolis] server on port ${PORT}`);
   console.log(`[Geopolis] static: public/`);
 });
