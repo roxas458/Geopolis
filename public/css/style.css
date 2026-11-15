@@ -1371,3 +1371,101 @@ input[type="range"]::-moz-range-thumb {
   .menu-orb { animation: none; }
   .news-fresh { animation: none; }
 }
+/* ============================================================
+   v3.15 FIX: МОБИЛЬНЫЕ ИСПРАВЛЕНИЯ
+   ============================================================ */
+
+/* 1. #view должен скроллиться, а не схлопываться */
+@media (max-width: 768px) {
+  #game-screen.active {
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+    height: auto;
+  }
+  #game-screen.active #view {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    min-height: 0; /* критично для flex-скролла */
+  }
+}
+
+/* 2. Кнопки «Сохранить» и «В меню» не должны схлопываться */
+@media (max-width: 768px) {
+  .tb-actions {
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+  .tb-center {
+    flex-wrap: wrap;
+  }
+  .btn-save-game,
+  .btn-menu-exit {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+}
+
+/* 3. Слайдеры — палец должен попадать */
+@media (max-width: 768px) {
+  input[type="range"] {
+    height: 14px;
+    background: transparent;
+    padding: 6px 0;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.12);
+  }
+  input[type="range"]::-moz-range-track {
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.12);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    margin-top: -6px; /* центрировать thumb на треке */
+  }
+}
+
+/* 4. Модалка — flex-скролл внутри */
+@media (max-width: 768px) {
+  .modal-card {
+    display: flex;
+    flex-direction: column;
+    max-height: 90dvh;
+  }
+  .modal-card > * {
+    flex-shrink: 0;
+  }
+  .modal-card > .modal-choices,
+  .modal-card > [style*="overflow"] {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 0;
+  }
+}
+
+/* 5. Сетки — на всякий случай без горизонтального скролла */
+@media (max-width: 768px) {
+  .grid.cols-2,
+  .grid.cols-3,
+  .grid.cols-4 {
+    grid-template-columns: 1fr !important;
+  }
+  #view {
+    overflow-x: hidden;
+  }
+}
+
+/* 6. Карточка парламента — SVG не должен вылезать */
+@media (max-width: 768px) {
+  .parliament-chart-wrap {
+    overflow: hidden;
+  }
+  .parliament-chart-wrap svg {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+}
