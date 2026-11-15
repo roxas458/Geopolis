@@ -1,5 +1,5 @@
 // ============================================================
-// WEBSOCKET-КЛИЕНТ (v3.13, D+C) — + скорость, + выход, + roleSlot
+// WEBSOCKET-КЛИЕНТ (v3.16, D+C) — + скорость, + выход, + roleSlot, + nick, + ping
 // ============================================================
 import { io } from 'https://cdn.socket.io/4.7.5/socket.io.esm.min.js';
 
@@ -25,10 +25,14 @@ export function connect() {
   }
 
   socket = io({
-    transports: ['polling', 'websocket'],
+    // v3.15 FIX: websocket первым (Render поддерживает), polling — fallback
+    transports: ['websocket', 'polling'],
     reconnection: true,
-    reconnectionAttempts: 10,
+    // v3.15 FIX: не сдаваться — Render Free засыпает через 15 мин
+    reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    timeout: 20000, // v3.15: таймаут на одно подключение
   });
 
   socket.on('connect', () => {
@@ -39,6 +43,11 @@ export function connect() {
   socket.on('disconnect', (reason) => {
     console.log('[ws] disconnected:', reason);
     listeners.disconnected.forEach(fn => fn(reason));
+  });
+
+  // v3.15: логируем connect_error (Render Free может вернуть 502 при пробуждении)
+  socket.on('connect_error', (err) => {
+    console.warn('[ws] connect_error:', err.message);
   });
 
   socket.on('room:update', (room) => {
@@ -77,8 +86,8 @@ export function getSocket() {
 }
 
 // === ДОЖДАТЬСЯ СОЕДИНЕНИЯ (для emit без гонок) ===
-// FIX: снимаем слушатель 'connect' при таймауте, чтобы не копить утечки
-export function waitForConnection(timeoutMs = 5000) {
+// v3.15: таймаут 35 сек — Render Free просыпается до 30 сек
+export function waitForConnection(timeoutMs = 35000) {
   return new Promise((resolve, reject) => {
     if (socket && socket.connected) return resolve(socket);
     if (!socket) connect();
@@ -109,7 +118,10 @@ function emit(event, data) {
     if (!socket) {
       return reject(new Error('Нет соединения с сервером'));
     }
-    const timeout = setTimeout(() => reject(new Error('Таймаут запроса: ' + event)), 5000);
+    // v3.15: для room:* — 35 сек (Render Free просыпается), для остальных — 10 сек
+    const isRoomEvent = event.startsWith('room:') || event === 'rooms:list';
+    const timeoutMs = isRoomEvent ? 35000 : 10000;
+    const timeout = setTimeout(() => reject(new Error('Таймаут запроса: ' + event)), timeoutMs);
 
     const cb = (response) => {
       clearTimeout(timeout);
@@ -132,8 +144,6 @@ function emit(event, data) {
 // === ПОДПИСКА НА СОБЫТИЯ ===
 export function on(event, fn) {
   const key = mapEvent(event);
-  // FIX: инициализируем массив для неизвестных событий,
-  // иначе слушатель молча теряется
   if (!listeners[key]) listeners[key] = [];
   listeners[key].push(fn);
   return () => off(event, fn);
@@ -160,6 +170,25 @@ function mapEvent(event) {
   return map[event] || event;
 }
 
+// ============================================================
+// v3.16: НИК ИГРОКА (localStorage)
+// ============================================================
+export function getNick() {
+  try {
+    return localStorage.getItem('geopolis_nick') || '';
+  } catch (e) {
+    return '';
+  }
+}
+export function setNick(nick) {
+  const n = String(nick || '').trim().slice(0, 20);
+  try {
+    if (n) localStorage.setItem('geopolis_nick', n);
+    else localStorage.removeItem('geopolis_nick');
+  } catch (e) { /* ignore */ }
+  return n;
+}
+
 // === API ===
 export async function createRoom() {
   return emit('room:create');
@@ -169,10 +198,12 @@ export async function joinRoom(code) {
   return emit('room:join', { code });
 }
 
-// v3.3: roleSlot — стабильный ключ ('president', 'prime_minister', 'monarch',
-// 'speaker', 'party_leader:0', ...) вместо personId (id разные на клиенте и сервере)
-export async function pickCountry({ code, playerId, countryName, personName, personId, role, roleSlot }) {
-  return emit('room:pickCountry', { code, playerId, countryName, personName, personId, role, roleSlot });
+// v3.16: pickCountry передаёт nick (из аргумента или localStorage)
+export async function pickCountry({ code, playerId, countryName, personName, personId, role, roleSlot, nick }) {
+  return emit('room:pickCountry', {
+    code, playerId, countryName, personName, personId, role, roleSlot,
+    nick: nick || getNick() || 'Игрок',
+  });
 }
 
 export async function setReady({ code, ready }) {
@@ -207,4 +238,20 @@ export async function sendAction({ code, action }) {
 
 export async function listRooms() {
   return emit('rooms:list');
+}
+
+// ============================================================
+// v3.16: ПИНГ (RTT через emit → cb) + ping:report
+// ============================================================
+export async function ping() {
+  const start = Date.now();
+  await emit('ping', { ping: 0 });
+  const rtt = Date.now() - start;
+  // v3.16 FIX: отправляем RTT на сервер (fire-and-forget), чтобы другие видели
+  try {
+    if (socket && socket.connected) {
+      socket.emit('ping:report', { ping: rtt }, () => {});
+    }
+  } catch (e) { /* ignore */ }
+  return rtt;
 }

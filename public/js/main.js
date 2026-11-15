@@ -7,7 +7,7 @@ import { renderTab, updateView, setTab, openEventModal, isEventModalOpen } from 
 import { initLobby, showLobbyScreen, getCurrentRoom, getCurrentPlayerId, forceLeaveRoom } from './ui/lobby.js';
 import { createNetEngine } from './net/netEngine.js';
 import { setRoomCode } from './net/actions.js';
-import { getSocket, on, pauseRoom, resumeRoom, setSpeed as netSetSpeed } from './net/client.js';
+import { getSocket, on, pauseRoom, resumeRoom, setSpeed as netSetSpeed, ping } from './net/client.js'; // v3.16: + ping
 
 let engine = null;
 let lastRender = 0;
@@ -21,6 +21,9 @@ let lastRenderedYear = null;
 
 // v3.8: перерисовка «Политики» ТОЛЬКО при изменении числа биллей
 let lastBillsCount = -1;
+
+// v3.16: интервал пинга
+let pingInterval = null;
 
 // ============================================================
 // НАСТРОЙКИ
@@ -138,6 +141,30 @@ function resetRenderState() {
 }
 
 // ============================================================
+// v3.16: ПИНГ (каждые 5 сек, только в мультиплеере)
+// ============================================================
+function startPingLoop() {
+  if (pingInterval) clearInterval(pingInterval);
+  if (!engine?.isNetEngine) return;
+  pingInterval = setInterval(async () => {
+    if (!engine?.isNetEngine) return;
+    try {
+      const ms = await ping();
+      if (typeof engine.setMyPing === 'function') {
+        engine.setMyPing(ms);
+      }
+    } catch (e) { /* ignore */ }
+  }, 5000);
+}
+
+function stopPingLoop() {
+  if (pingInterval) {
+    clearInterval(pingInterval);
+    pingInterval = null;
+  }
+}
+
+// ============================================================
 // ОДИНОЧНАЯ ИГРА
 // ============================================================
 function startNewGameFlow() {
@@ -168,10 +195,10 @@ function startGame(playerCountry) {
   }
   resetRenderState();
   currentMode = 'single';
+  stopPingLoop(); // v3.16: одиночная — без пинга
 
   try {
     const world = generateWorld(playerCountry);
-    // generateWorld уже ставит playerCountry.isPlayer = true — дубль убран
     engine = new GameEngine({ world, playerId: playerCountry.id });
     engine.autoSaveEnabled = settings.autosave;
     engine.subscribe(onTick);
@@ -208,6 +235,7 @@ function startWithEngine(loadedEngine) {
   engine.setSpeed(settings.defaultSpeed);
   resetRenderState();
   currentMode = 'single';
+  stopPingLoop();
   show('game-screen');
   setupMobileScrollProtection();
   refreshTop();
@@ -221,7 +249,7 @@ window.__startGame = startGame;
 // ============================================================
 // МУЛЬТИПЛЕЕР
 // ============================================================
-function startMultiplayerGame({ world, playerId, date, news, paused, speed, dayCount, tickCount, roomCode }) {
+function startMultiplayerGame({ world, playerId, date, news, paused, speed, dayCount, tickCount, roomCode, players }) {
   if (engine) {
     if (typeof engine.destroy === 'function') engine.destroy();
     engine.pause?.();
@@ -232,9 +260,10 @@ function startMultiplayerGame({ world, playerId, date, news, paused, speed, dayC
   currentMode = 'multiplayer';
 
   try {
-    engine = createNetEngine({ world, playerId, date, news, paused, speed, dayCount, tickCount });
+    engine = createNetEngine({ world, playerId, date, news, paused, speed, dayCount, tickCount, players }); // v3.16: + players
     if (roomCode) setRoomCode(roomCode);
     engine.subscribe(onTick);
+    startPingLoop(); // v3.16
   } catch (err) {
     console.error('[Geopolis] Ошибка мультиплеера:', err);
     toast('Не удалось начать мультиплеер: ' + err.message, 'error');
@@ -271,6 +300,7 @@ window.__onMultiplayerStart = (code) => {
       dayCount: state.dayCount,
       tickCount: state.tickCount,
       roomCode: code,
+      players: state.players, // v3.16
     });
   };
 
@@ -438,14 +468,12 @@ function importSave(file) {
   reader.onload = (e) => {
     try {
       const data = JSON.parse(e.target.result);
-      // FIX: более строгая валидация формата сейва
       if (!data || !data.world || !Array.isArray(data.world.countries)) {
         throw new Error('Неверный формат: нет world.countries');
       }
       if (!data.playerId) {
         throw new Error('Неверный формат: нет playerId');
       }
-      // FIX: playerId должен существовать среди стран, иначе игра тикает вхолостую
       if (!data.world.countries.some(c => c.id === data.playerId)) {
         throw new Error('playerId не найден среди стран');
       }
@@ -506,9 +534,9 @@ function continueGame() {
 // ВОЗВРАТ В МЕНЮ
 // ============================================================
 function goToMenu() {
+  stopPingLoop(); // v3.16
   if (engine) {
     if (currentMode === 'multiplayer') {
-      // FIX: forceLeaveRoom может вернуть не-Promise — оборачиваем в Promise.resolve
       Promise.resolve(forceLeaveRoom()).catch(() => {});
     }
     if (typeof engine.destroy === 'function') engine.destroy();
@@ -599,8 +627,6 @@ function onTick() {
   const now = performance.now();
   let didFullRender = false;
 
-  // v3.8: полная перерисовка «Политики» — ТОЛЬКО если число
-  // активных законопроектов изменилось (новый пришёл / старый проголосован).
   const c = engine.getPlayer();
   if (c && !engine.paused) {
     const billsCount = (c.bills || []).filter(b => b.status === 'proposed').length;
@@ -616,7 +642,6 @@ function onTick() {
     }
   }
 
-  // Плавное обновление data-* — каждые 400 мс.
   if (!didFullRender && now - lastRender >= 400) {
     lastRender = now;
     updateView(engine);
@@ -679,8 +704,8 @@ function init() {
   });
   bind('#btn-settings', () => { applySettings(); show('settings-screen'); });
   bind('#btn-about', () => {
-    // FIX: версия приведена к актуальной
-    toast('Geopolis v3.13 — HOI4-стиль, 1936. 30 государств, парламент, экономика, дипломатия, мультиплеер, пауза/скорость, живой прогресс законов, референдумы, программы партий, конкуренция.', 'info', 6000);
+    // v3.16: версия
+    toast('Geopolis v3.16 — HOI4-стиль, 1936. 30 государств, парламент, экономика, дипломатия, мультиплеер, AI-страны, внутренняя безопасность, ники и пинг.', 'info', 6000);
   });
 
   bind('#btn-settings-back', () => show('menu-screen'));

@@ -10,8 +10,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="format-detection" content="telephone=no">
 <meta name="description" content="Geopolis — геополитический симулятор 1936 года в браузере. Управляйте государством в реальном времени.">
-<!-- v3.15: версия в title -->
-<title>Geopolis v3.15 — Геополитический симулятор</title>
+<!-- v3.16: версия в title -->
+<title>Geopolis v3.16 — Геополитический симулятор</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -79,15 +79,15 @@
             <span class="mb-icon">ℹ️</span>
             <span class="mb-text">
               <span class="mb-title">Об игре</span>
-              <!-- v3.15: версия -->
-              <span class="mb-sub">Geopolis v3.15</span>
+              <!-- v3.16: версия -->
+              <span class="mb-sub">Geopolis v3.16</span>
             </span>
           </button>
         </div>
       </nav>
 
-      <!-- v3.15: версия + новые фичи -->
-      <footer class="menu-footer">v3.15 · HOI4-стиль · 30 государств · Мультиплеер · Парламентская жизнь · Внутренняя безопасность · AI-страны</footer>
+      <!-- v3.16: версия + новые фичи -->
+      <footer class="menu-footer">v3.16 · HOI4-стиль · 30 государств · Мультиплеер · Внутренняя безопасность · AI-страны · Ники и пинг</footer>
     </div>
   </section>
 
@@ -101,6 +101,12 @@
         <div class="card">
           <h3>Создать комнату</h3>
           <p class="muted small">Вы станете хостом. Другие подключатся по коду.</p>
+          <!-- v3.16: поле ника -->
+          <label class="field" style="margin-top: 12px;">
+            <span>Ваш ник</span>
+            <input id="mp-nick-input" type="text" placeholder="Игрок" maxlength="20" autocomplete="off"
+              style="padding: 10px; width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 15px;" />
+          </label>
           <button id="btn-mp-create" class="btn primary" style="margin-top: 12px;">➕ Создать комнату</button>
         </div>
 

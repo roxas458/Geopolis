@@ -86,6 +86,15 @@ function canGovern(c) {
   return c && c.playerInPower !== false;
 }
 
+// v3.16: список игроков в мультиплеере
+function getRoomPlayers(engine) {
+  if (!engine) return null;
+  // NetEngine.players (из game:state) или engine.room.players (из room:update)
+  if (Array.isArray(engine.players) && engine.players.length) return engine.players;
+  const room = engine.room || (typeof engine.getRoom === 'function' ? engine.getRoom() : null);
+  return room?.players || null;
+}
+
 function act(engine, singleFn, netFn, logInfo = null) {
   if (isNet(engine)) {
     try {
@@ -507,6 +516,38 @@ function viewOverview(engine, c) {
     )) : [el('div', { class: 'empty' }, 'Пока пусто')])
   );
 
+  // v3.16: список игроков (только в мультиплеере)
+  const roomPlayers = isNet(engine) ? getRoomPlayers(engine) : null;
+  const playersCard = roomPlayers && roomPlayers.length
+    ? card2('👥 Игроки', `${roomPlayers.length}`,
+        ...roomPlayers.map(p => {
+          const isMe = p.playerId === c.id;
+          const isHost = p.isHost;
+          const ping = Number.isFinite(p.ping) ? `${p.ping} мс` : '—';
+          const pingColor = !p.connected ? 'var(--red)'
+            : !Number.isFinite(p.ping) ? 'var(--muted)'
+            : p.ping < 100 ? 'var(--green)'
+            : p.ping < 250 ? 'var(--gold)'
+            : 'var(--red)';
+          return el('div', { class: 'list-row', style: { padding: '6px 0' } },
+            el('span', { style: { fontSize: '14px' } }, p.connected ? '🟢' : '🔴'),
+            el('div', { style: { flex: 1, minWidth: 0 } },
+              el('div', { class: 'lr-name', style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' } },
+                p.nick || 'Игрок',
+                isMe ? el('span', { class: 'badge good', style: { fontSize: '9px' } }, 'ВЫ') : null,
+                isHost ? el('span', { class: 'badge warn', style: { fontSize: '9px' } }, '👑 ХОСТ') : null
+              ),
+              el('div', { class: 'lr-sub' }, `${p.countryName || p.playerId} · ${p.personName || '—'}`)
+            ),
+            el('div', { style: { textAlign: 'right', minWidth: '60px' } },
+              el('div', { class: 'lr-name', style: { color: pingColor } }, ping),
+              el('div', { class: 'lr-sub' }, p.connected ? 'онлайн' : 'офлайн')
+            )
+          );
+        })
+      )
+    : null;
+
   return el('div', { class: 'grid' },
     // v3.15: предупреждение для оппозиции
     !gov ? card2('⚠️ Вы в оппозиции', null,
@@ -515,6 +556,7 @@ function viewOverview(engine, c) {
         'Вам доступно: митинг, скандал, вотум недоверия, финансирование своей партии.')
     ) : null,
     topStats,
+    playersCard, // v3.16
     el('div', { class: 'grid cols-2' }, econCard, socCard),
     el('div', { class: 'grid cols-2' }, polCard, newsCard),
     logCard,

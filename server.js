@@ -1,5 +1,5 @@
 // ============================================================
-// SERVER.JS — Express + Socket.IO (v3.15, D+C)
+// SERVER.JS — Express + Socket.IO (v3.16, D+C)
 // Точка входа. Отдаёт public/ + обрабатывает Socket.IO.
 // ============================================================
 import express from 'express';
@@ -17,6 +17,9 @@ const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: '*' },
+  // v3.15 FIX: быстрее обнаруживаем мёртвые соединения (Render / мобильные сети)
+  pingInterval: 25000,
+  pingTimeout: 60000,
 });
 
 // ============================================================
@@ -33,13 +36,24 @@ function withCb(fn) {
 }
 
 // ============================================================
+// v3.15 FIX: проверка хоста по playerId (переподключение Socket.IO)
+// ============================================================
+function isHostOfRoom(socket, room) {
+  if (!room) return false;
+  if (room.hostSocketId === socket.id) return true;
+  const ref = findRoomBySocket(socket.id);
+  if (!ref || !ref.playerId) return false;
+  const p = (room.players || []).find(x => x.playerId === ref.playerId);
+  return !!(p && p.isHost);
+}
+
+// ============================================================
 // СТАТИКА
 // ============================================================
 app.use(express.static('public'));
 
-// v3.15: health-check с версией и uptime (для Render)
 app.get('/health', (req, res) => {
-  res.json({ ok: true, rooms: listRooms().length, version: '3.15', uptime: process.uptime() });
+  res.json({ ok: true, rooms: listRooms().length, version: '3.16', uptime: process.uptime() });
 });
 
 // ============================================================
@@ -96,6 +110,7 @@ io.on('connection', (socket) => {
         data.personId,
         data.role,
         data.roleSlot,
+        data.nick, // v3.16
       );
       if (!r.ok) return cb(r);
 
@@ -127,7 +142,7 @@ io.on('connection', (socket) => {
     try {
       const room = getRoom(data?.code);
       if (!room) return cb({ ok: false, reason: 'Комната не найдена' });
-      if (room.hostSocketId !== socket.id) {
+      if (!isHostOfRoom(socket, room)) {
         return cb({ ok: false, reason: 'Только хост может начать игру' });
       }
       if (!room.allReady()) {
@@ -152,7 +167,7 @@ io.on('connection', (socket) => {
     try {
       const room = getRoom(data?.code);
       if (!room) return cb({ ok: false, reason: 'Комната не найдена' });
-      if (room.hostSocketId !== socket.id) {
+      if (!isHostOfRoom(socket, room)) {
         return cb({ ok: false, reason: 'Только хост может менять скорость' });
       }
       const r = room.setSpeed(data.speed);
@@ -169,7 +184,7 @@ io.on('connection', (socket) => {
     try {
       const room = getRoom(data?.code);
       if (!room) return cb({ ok: false, reason: 'Комната не найдена' });
-      if (room.hostSocketId !== socket.id) {
+      if (!isHostOfRoom(socket, room)) {
         return cb({ ok: false, reason: 'Только хост может ставить паузу' });
       }
       room.pause(io);
@@ -185,7 +200,7 @@ io.on('connection', (socket) => {
     try {
       const room = getRoom(data?.code);
       if (!room) return cb({ ok: false, reason: 'Комната не найдена' });
-      if (room.hostSocketId !== socket.id) {
+      if (!isHostOfRoom(socket, room)) {
         return cb({ ok: false, reason: 'Только хост может возобновить' });
       }
       room.resume(io);
@@ -232,7 +247,31 @@ io.on('connection', (socket) => {
     }
   }));
 
-  // === ДЕЙСТВИЕ ИГРОКА — КРИТИЧНО: cb(result) ===
+  // === v3.16: ПИНГ (клиент шлёт — сервер отвечает) ===
+  // v3.16 FIX: здесь только RTT, setPing — в 'ping:report'
+  socket.on('ping', withCb((data, cb) => {
+    try {
+      cb({ ok: true, ts: Date.now() });
+    } catch (e) {
+      cb({ ok: false, reason: e.message });
+    }
+  }));
+
+  // === v3.16: ПИНГ-ОТЧЁТ (клиент сообщает свой RTT, сохраняем для всех) ===
+  socket.on('ping:report', withCb((data, cb) => {
+    try {
+      const ref = findRoomBySocket(socket.id);
+      if (ref && ref.room) {
+        const ping = Number(data?.ping) || 0;
+        if (ping > 0) ref.room.setPing(socket.id, ping);
+      }
+      if (typeof cb === 'function') cb({ ok: true });
+    } catch (e) {
+      if (typeof cb === 'function') cb({ ok: false, reason: e.message });
+    }
+  }));
+
+  // === ДЕЙСТВИЕ ИГРОКА ===
   socket.on('game:action', withCb((data, cb) => {
     try {
       const room = getRoom(data?.code);
@@ -294,7 +333,6 @@ setInterval(() => {
 // ============================================================
 // ЗАПУСК
 // ============================================================
-// v3.15: '0.0.0.0' — обязательно для Render
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`[Geopolis] server on port ${PORT}`);
   console.log(`[Geopolis] static: public/`);

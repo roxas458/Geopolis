@@ -1,5 +1,5 @@
 // ============================================================
-// NET-ENGINE (v3.13, D+C) — прокси для GameEngine на клиенте
+// NET-ENGINE (v3.16, D+C) — прокси для GameEngine на клиенте
 // ============================================================
 import { on } from './client.js';
 
@@ -21,10 +21,24 @@ export class NetEngine {
     this.yearCount = 0;
     this.autoSaveEnabled = false;
     this._unsubscribe = null;
+    this._unsubRoom = null;
+
+    // v3.16: комната и игроки
+    this.room = null;          // объект комнаты (room:update)
+    this.players = [];         // список игроков (nick, countryName, ping, connected, isHost)
+    this.myPing = null;        // мой RTT (обновляется из main.js)
+    this.mySocketId = null;    // socket.id (для сопоставления)
 
     // Подписка на обновления от сервера
     this._unsubscribe = on('game:state', (state) => {
       this._applyState(state);
+    });
+
+    // v3.16: подписка на room:update (список игроков, ник, хост)
+    this._unsubRoom = on('room:update', (room) => {
+      this.room = room;
+      if (room?.players) this.players = room.players;
+      this.notify();
     });
   }
 
@@ -42,7 +56,28 @@ export class NetEngine {
     if (typeof state.dayCount === 'number') this.dayCount = state.dayCount;
     if (typeof state.tickCount === 'number') this.tickCount = state.tickCount;
 
+    // v3.16: список игроков из game:state (сервер уже шлёт players)
+    if (Array.isArray(state.players)) {
+      // сохраняем мой пинг (если сервер его не знает — берём локальный)
+      const me = state.players.find(p => p.playerId === this.playerId);
+      if (me && this.myPing != null) me.ping = this.myPing;
+      this.players = state.players;
+    }
+
     this.notify();
+  }
+
+  // v3.16: обновить мой пинг (вызывается из main.js)
+  setMyPing(ms) {
+    this.myPing = Math.max(0, Math.round(Number(ms) || 0));
+    const me = this.players.find(p => p.playerId === this.playerId);
+    if (me) me.ping = this.myPing;
+    this.notify();
+  }
+
+  // v3.16: получить комнату
+  getRoom() {
+    return this.room;
   }
 
   // ============================================================
@@ -53,7 +88,6 @@ export class NetEngine {
     return this.world.countries.find(c => c.id === this.playerId) || null;
   }
 
-  // FIX: совместимость с GameEngine (views.js / main.js могут вызвать)
   getPlayerById(id) {
     return this.getCountry(id);
   }
@@ -108,6 +142,10 @@ export class NetEngine {
       this._unsubscribe();
       this._unsubscribe = null;
     }
+    if (this._unsubRoom) {
+      this._unsubRoom();
+      this._unsubRoom = null;
+    }
     this.listeners = [];
   }
 }
@@ -115,12 +153,13 @@ export class NetEngine {
 // ============================================================
 // СОЗДАТЬ NET-ENGINE ИЗ СОСТОЯНИЯ СЕРВЕРА
 // ============================================================
-export function createNetEngine({ world, playerId, date, news, paused, speed, dayCount, tickCount }) {
+export function createNetEngine({ world, playerId, date, news, paused, speed, dayCount, tickCount, players }) {
   const engine = new NetEngine({ world, playerId, date });
   if (news) engine.news = news;
   if (typeof paused === 'boolean') engine.paused = paused;
   if (typeof speed === 'number') engine.speed = speed;
   if (typeof dayCount === 'number') engine.dayCount = dayCount;
   if (typeof tickCount === 'number') engine.tickCount = tickCount;
+  if (Array.isArray(players)) engine.players = players; // v3.16
   return engine;
 }

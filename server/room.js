@@ -1,5 +1,5 @@
 // ============================================================
-// КОМНАТА (v3.13, D+C) — speed + roleSlot (персонаж по слоту)
+// КОМНАТА (v3.16, D+C) — speed + roleSlot + isHost + nick
 // ============================================================
 import { GameEngine } from '../public/js/game/engine.js';
 import { createPresetCountry } from '../public/js/game/state.js';
@@ -15,7 +15,7 @@ export class Room {
   constructor(code, hostSocketId) {
     this.code = code;
     this.hostSocketId = hostSocketId;
-    this.players = [];         // { socketId, playerId, countryName, personName, personId, role, roleSlot, ready, connected }
+    this.players = [];         // { socketId, playerId, ..., isHost, nick, ready, connected }
     this.started = false;
     this.engine = null;
     this.tickInterval = null;
@@ -28,7 +28,7 @@ export class Room {
   // ============================================================
   // ИГРОКИ
   // ============================================================
-  addPlayer(socketId, playerId, countryName, personName, personId, role, roleSlot) {
+  addPlayer(socketId, playerId, countryName, personName, personId, role, roleSlot, nick) {
     if (this.players.length >= this.maxPlayers) {
       return { ok: false, reason: 'Комната заполнена' };
     }
@@ -39,6 +39,7 @@ export class Room {
       return { ok: false, reason: 'Вы уже в комнате' };
     }
 
+    const isHost = this.players.length === 0; // v3.15: первый = хост
     this.players.push({
       socketId,
       playerId,
@@ -47,17 +48,23 @@ export class Room {
       personId: personId || null,
       role: role || null,
       roleSlot: roleSlot || null,
+      nick: String(nick || 'Игрок').trim().slice(0, 20) || 'Игрок', // v3.16
       ready: false,
       connected: true,
+      isHost, // v3.15
     });
+    if (isHost) this.hostSocketId = socketId;
     return { ok: true };
   }
 
   removePlayer(socketId) {
     const idx = this.players.findIndex(p => p.socketId === socketId);
     if (idx === -1) return false;
+    const wasHost = this.players[idx].isHost || socketId === this.hostSocketId;
     this.players.splice(idx, 1);
-    if (socketId === this.hostSocketId && this.players.length > 0) {
+    // v3.15: если ушёл хост — передаём следующему
+    if (wasHost && this.players.length > 0) {
+      this.players[0].isHost = true;
       this.hostSocketId = this.players[0].socketId;
     }
     return true;
@@ -110,8 +117,7 @@ export class Room {
         else if (p.roleSlot === 'monarch') person = country.monarch;
         else if (p.roleSlot === 'speaker') person = country.speaker;
         else if (p.roleSlot.startsWith('party_leader:')) {
-          // FIX: ищем партию по имени, а не по индексу —
-          // порядок партий на клиенте и сервере не совпадает (generateParties shuffle)
+          // FIX: ищем партию по имени, а не по индексу
           const name = p.roleSlot.slice('party_leader:'.length);
           const party = country.parties?.find(x => x.name === name);
           person = party?.leader || null;
@@ -124,7 +130,6 @@ export class Room {
         const isHead = head.person?.id === person.id;
         country.playerRole = isHead ? head.position : null;
         country.playerInPower = isHead;
-        // FIX: person.partyId в generatePerson undefined — используем partyIdFromSlot
         country.playerPartyId = partyIdFromSlot || person.partyId || head.partyId || null;
       } else {
         // Fallback — глава
@@ -161,6 +166,12 @@ export class Room {
       playerIds,
       date: { year: 1936, month: 1, day: 1 },
     });
+
+    // v3.15: гарантируем, что хост есть
+    if (!this.players.some(p => p.isHost) && this.players.length > 0) {
+      this.players[0].isHost = true;
+      this.hostSocketId = this.players[0].socketId;
+    }
 
     this.started = true;
     this.paused = false;
@@ -258,6 +269,16 @@ export class Room {
           speed: this.speed,
           dayCount: this.engine.dayCount,
           tickCount: this.engine.tickCount,
+          // v3.16: список игроков (ник, страна, пинг, онлайн)
+          players: this.players.map(x => ({
+            playerId: x.playerId,
+            nick: x.nick || 'Игрок',
+            countryName: x.countryName,
+            personName: x.personName,
+            connected: x.connected,
+            isHost: !!x.isHost,
+            ping: x.ping || null,
+          })),
         });
       } catch (e) {
         console.error(`[Room ${this.code}] broadcastState error:`, e);
@@ -273,6 +294,14 @@ export class Room {
     if (!p) return { ok: false, reason: 'Вы не в комнате' };
     if (!this.engine) return { ok: false, reason: 'Игра не начата' };
     return handleAction(this, p.playerId, action);
+  }
+
+  // ============================================================
+  // v3.16: ПИНГ (сохраняем на сервере, чтобы все видели)
+  // ============================================================
+  setPing(socketId, ping) {
+    const p = this.players.find(x => x.socketId === socketId);
+    if (p) p.ping = Math.max(0, Math.min(9999, Number(ping) || 0));
   }
 
   // ============================================================
@@ -298,9 +327,11 @@ export class Room {
         personId: p.personId,
         role: p.role,
         roleSlot: p.roleSlot || null,
+        nick: p.nick || 'Игрок', // v3.16
         ready: p.ready,
         connected: p.connected,
-        isHost: p.socketId === this.hostSocketId,
+        isHost: !!p.isHost, // v3.15
+        ping: p.ping || null, // v3.16
       })),
       maxPlayers: this.maxPlayers,
       started: this.started,

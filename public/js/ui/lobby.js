@@ -1,5 +1,5 @@
 // ============================================================
-// ЛОББИ (v3.13, D+C) — создание/вход/выбор страны/персонажа
+// ЛОББИ (v3.16, D+C) — создание/вход/выбор страны/персонажа + ник
 // ============================================================
 import { qs, qsa, el, mount, toast } from '../core/dom.js';
 import { flagStyle, num } from '../core/util.js';
@@ -7,6 +7,7 @@ import {
   connect, on, createRoom, joinRoom, pickCountry, setReady,
   startRoom, pauseRoom, resumeRoom, listRooms, isConnected,
   waitForConnection, leaveRoom as netLeaveRoom,
+  getNick, setNick, // v3.16
 } from '../net/client.js';
 import { setRoomCode, getRoomCode } from '../net/actions.js';
 import { COUNTRY_PRESETS } from '../game/names.js';
@@ -39,6 +40,15 @@ export function initLobby() {
   bindSafe('#btn-room-pause', () => togglePause());
   bindSafe('#btn-room-back', () => showScreen('menu-screen'));
 
+  // === v3.16: ПОЛЕ НИКА ===
+  const nickInput = qs('#mp-nick-input');
+  if (nickInput) {
+    nickInput.value = getNick();
+    nickInput.addEventListener('input', () => {
+      setNick(nickInput.value);
+    });
+  }
+
   // === ПОДПИСКИ НА СОБЫТИЯ ===
   connect();
   setupSubscriptions();
@@ -58,8 +68,6 @@ function setupSubscriptions() {
     renderRoom(room);
   }));
 
-  // FIX: сервер может не прислать code (старая версия) — fallback на currentRoom.code.
-  // Без этого __onMultiplayerStart(undefined) → setRoomCode(undefined) → sendAction ломается.
   unsubscribers.push(on('room:started', (data) => {
     const code = data?.code || currentRoom?.code;
     toast('Игра началась!', 'success');
@@ -77,8 +85,6 @@ function setupSubscriptions() {
     toast('Игрок отключился. Игра на паузе.', 'warn');
   }));
 
-  // Не джойним автоматически начатую комнату — иначе после выхода
-  // из игры возвращает старую страну при реконнекте
   unsubscribers.push(on('connect', () => {
     if (currentRoom && !currentRoom.started) {
       joinRoom(currentRoom.code).catch(() => {});
@@ -261,8 +267,9 @@ function renderPlayers(room) {
     el('div', { style: { display: 'flex', gap: '10px', alignItems: 'center' } },
       el('span', { class: `dot ${p.connected ? '' : 'red'}`, style: { background: p.connected ? '#3ecf8e' : '#f0596b' } }),
       el('div', {},
-        el('div', { class: 'lr-name' }, `${p.countryName}${p.isHost ? ' 👑' : ''}`),
-        el('div', { class: 'lr-sub' }, `${p.personName} · ${p.role ? POSITIONS[p.role]?.name || p.role : 'без должности'}`)
+        // v3.16: ник + страна
+        el('div', { class: 'lr-name' }, `${p.nick || 'Игрок'}${p.isHost ? ' 👑' : ''}`),
+        el('div', { class: 'lr-sub' }, `${p.countryName} · ${p.personName} · ${p.role ? POSITIONS[p.role]?.name || p.role : 'без должности'}`)
       )
     ),
     el('span', { class: `badge ${p.ready ? 'good' : 'info'}` }, p.ready ? '✓ Готов' : 'Ожидание')
@@ -328,13 +335,12 @@ async function openPersonSelectModal(preset) {
   modal.classList.remove('hidden');
   const close = () => modal.classList.add('hidden');
 
-  // Создаём временную страну, чтобы получить персонажей
   const { createPresetCountry } = await import('../game/state.js');
   const country = createPresetCountry(preset, false);
 
   const chars = collectCharacters(country);
 
-  // FIX: передаём roleSlot (стабильный ключ), а не personId (id разные между клиентом и сервером)
+  // v3.16: nick передаётся в pickCountry
   const finish = async (person, role, slot) => {
     close();
     try {
@@ -346,6 +352,7 @@ async function openPersonSelectModal(preset) {
         personId: person?.id || null,
         role: role || null,
         roleSlot: slot || null,
+        nick: getNick() || 'Игрок', // v3.16
       });
       if (!r.ok) {
         toast(r.reason || 'Не удалось выбрать страну', 'error');
@@ -398,8 +405,6 @@ function collectCharacters(country) {
   add(country.primeMinister, 'Премьер-министр', 'prime_minister', 'prime_minister');
   add(country.monarch, 'Монарх', 'monarch', 'monarch');
   add(country.speaker, 'Спикер парламента', null, 'speaker');
-  // FIX: party_leader по имени партии, а не по индексу —
-  // индексы на клиенте и сервере не совпадают (generateParties shuffle)
   (country.parties || []).forEach((p) => {
     if (p.leader && p.name) {
       add(p.leader, `Лидер «${p.name}»`, null, `party_leader:${p.name}`);
