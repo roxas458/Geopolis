@@ -1,6 +1,6 @@
 // ============================================================
-// SERVER.JS — Express + Socket.IO (v3.16, D+C)
-// Точка входа. Отдаёт public/ + обрабатывает Socket.IO.
+// SERVER.JS — Express + Socket.IO (v3.16.1, D+C)
+// FIX: cors, room:create guard, ping-обработчики, disconnect
 // ============================================================
 import express from 'express';
 import { createServer } from 'http';
@@ -16,8 +16,15 @@ const PORT = process.env.PORT || 3000;
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: '*' },
-  // v3.15 FIX: быстрее обнаруживаем мёртвые соединения (Render / мобильные сети)
+  // FIX: origin: true — отражает origin запроса (работает и localhost, и onrender.com)
+  // '*' тоже ок, но true безопаснее с credentials и не ломает WS-хендшейк
+  cors: {
+    origin: true,
+    credentials: true,
+    methods: ['GET', 'POST'],
+  },
+  // FIX: разрешаем polling+websocket, чтобы за прокси Render был fallback
+  transports: ['polling', 'websocket'],
   pingInterval: 25000,
   pingTimeout: 60000,
 });
@@ -53,7 +60,7 @@ function isHostOfRoom(socket, room) {
 app.use(express.static('public'));
 
 app.get('/health', (req, res) => {
-  res.json({ ok: true, rooms: listRooms().length, version: '3.16', uptime: process.uptime() });
+  res.json({ ok: true, rooms: listRooms().length, version: '3.16.1', uptime: process.uptime() });
 });
 
 // ============================================================
@@ -65,6 +72,12 @@ io.on('connection', (socket) => {
   // === СОЗДАТЬ КОМНАТУ ===
   socket.on('room:create', withCb((data, cb) => {
     try {
+      // FIX: guard — если сокет уже в комнате, вернуть её, а не плодить новые
+      const existingRef = findRoomBySocket(socket.id);
+      if (existingRef && existingRef.room) {
+        return cb({ ok: true, code: existingRef.room.code, room: existingRef.room.toJSON() });
+      }
+
       const room = createRoom(socket.id);
       if (!room) return cb({ ok: false, reason: 'Не удалось создать комнату' });
       socket.join(room.code);
@@ -110,7 +123,7 @@ io.on('connection', (socket) => {
         data.personId,
         data.role,
         data.roleSlot,
-        data.nick, // v3.16
+        data.nick,
       );
       if (!r.ok) return cb(r);
 
@@ -247,13 +260,12 @@ io.on('connection', (socket) => {
     }
   }));
 
-  // === v3.16: ПИНГ (клиент шлёт — сервер отвечает) ===
-  // v3.16 FIX: здесь только RTT, setPing — в 'ping:report'
+  // === v3.16: ПИНГ (клиент шлёт — сервер отвечает RTT) ===
   socket.on('ping', withCb((data, cb) => {
     try {
-      cb({ ok: true, ts: Date.now() });
+      if (typeof cb === 'function') cb({ ok: true, ts: Date.now() });
     } catch (e) {
-      cb({ ok: false, reason: e.message });
+      if (typeof cb === 'function') cb({ ok: false, reason: e.message });
     }
   }));
 
