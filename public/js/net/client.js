@@ -1,9 +1,11 @@
 // ============================================================
-// WEBSOCKET-КЛИЕНТ (v3.16, D+C) — + скорость, + выход, + roleSlot, + nick, + ping
+// WEBSOCKET-КЛИЕНТ (v3.16.1, D+C) — + скорость, + выход, + roleSlot, + nick, + ping
+// FIX: waitForConnection в emit, tryAllTransports, polling fallback, без дублей
 // ============================================================
 import { io } from 'https://cdn.socket.io/4.7.5/socket.io.esm.min.js';
 
 let socket = null;
+let initialized = false;
 let listeners = {
   roomUpdate: [],
   roomStarted: [],
@@ -13,6 +15,7 @@ let listeners = {
   playerLeft: [],
   connected: [],
   disconnected: [],
+  connectError: [],
 };
 
 export function connect() {
@@ -25,15 +28,20 @@ export function connect() {
   }
 
   socket = io({
-    // v3.15 FIX: websocket первым (Render поддерживает), polling — fallback
+    // FIX: tryAllTransports — Socket.IO 4.7+ сам откатится на polling,
+    // если websocket не поднялся (Render Free / прокси).
     transports: ['websocket', 'polling'],
+    tryAllTransports: true,
     reconnection: true,
-    // v3.15 FIX: не сдаваться — Render Free засыпает через 15 мин
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
-    timeout: 20000, // v3.15: таймаут на одно подключение
+    timeout: 20000,
   });
+
+  // FIX: обработчики навешиваем один раз, чтобы не дублировать события
+  if (initialized) return socket;
+  initialized = true;
 
   socket.on('connect', () => {
     console.log('[ws] connected:', socket.id);
@@ -45,9 +53,9 @@ export function connect() {
     listeners.disconnected.forEach(fn => fn(reason));
   });
 
-  // v3.15: логируем connect_error (Render Free может вернуть 502 при пробуждении)
   socket.on('connect_error', (err) => {
     console.warn('[ws] connect_error:', err.message);
+    listeners.connectError.forEach(fn => fn(err));
   });
 
   socket.on('room:update', (room) => {
@@ -86,7 +94,6 @@ export function getSocket() {
 }
 
 // === ДОЖДАТЬСЯ СОЕДИНЕНИЯ (для emit без гонок) ===
-// v3.15: таймаут 35 сек — Render Free просыпается до 30 сек
 export function waitForConnection(timeoutMs = 35000) {
   return new Promise((resolve, reject) => {
     if (socket && socket.connected) return resolve(socket);
@@ -118,7 +125,6 @@ function emit(event, data) {
     if (!socket) {
       return reject(new Error('Нет соединения с сервером'));
     }
-    // v3.15: для room:* — 35 сек (Render Free просыпается), для остальных — 10 сек
     const isRoomEvent = event.startsWith('room:') || event === 'rooms:list';
     const timeoutMs = isRoomEvent ? 35000 : 10000;
     const timeout = setTimeout(() => reject(new Error('Таймаут запроса: ' + event)), timeoutMs);
@@ -139,6 +145,15 @@ function emit(event, data) {
       reject(e);
     }
   });
+}
+
+// FIX: emit с ожиданием соединения — для холодного Render / быстрого клика на ПК
+async function emitWithWait(event, data, timeoutMs = 35000) {
+  if (!socket) connect();
+  if (socket && !socket.connected) {
+    await waitForConnection(timeoutMs);
+  }
+  return emit(event, data);
 }
 
 // === ПОДПИСКА НА СОБЫТИЯ ===
@@ -166,6 +181,7 @@ function mapEvent(event) {
     'room:playerLeft': 'playerLeft',
     'connect': 'connected',
     'disconnect': 'disconnected',
+    'connect_error': 'connectError',
   };
   return map[event] || event;
 }
@@ -191,63 +207,66 @@ export function setNick(nick) {
 
 // === API ===
 export async function createRoom() {
-  return emit('room:create');
+  // FIX: ждём соединения — иначе на ПК при быстром клике «Нет соединения»
+  return emitWithWait('room:create', {}, 35000);
 }
 
 export async function joinRoom(code) {
-  return emit('room:join', { code });
+  return emitWithWait('room:join', { code }, 35000);
 }
 
-// v3.16: pickCountry передаёт nick (из аргумента или localStorage)
 export async function pickCountry({ code, playerId, countryName, personName, personId, role, roleSlot, nick }) {
-  return emit('room:pickCountry', {
+  return emitWithWait('room:pickCountry', {
     code, playerId, countryName, personName, personId, role, roleSlot,
     nick: nick || getNick() || 'Игрок',
-  });
+  }, 35000);
 }
 
 export async function setReady({ code, ready }) {
-  return emit('room:ready', { code, ready });
+  return emitWithWait('room:ready', { code, ready }, 35000);
 }
 
 export async function startRoom({ code }) {
-  return emit('room:start', { code });
+  return emitWithWait('room:start', { code }, 35000);
 }
 
 export async function pauseRoom({ code }) {
-  return emit('room:pause', { code });
+  return emitWithWait('room:pause', { code }, 35000);
 }
 
 export async function resumeRoom({ code }) {
-  return emit('room:resume', { code });
+  return emitWithWait('room:resume', { code }, 35000);
 }
 
-// скорость (0 = пауза, 1..5 = скорость, только хост)
 export async function setSpeed({ code, speed }) {
-  return emit('room:speed', { code, speed });
+  return emitWithWait('room:speed', { code, speed }, 35000);
 }
 
-// выход из комнаты (удаляет игрока на сервере)
 export async function leaveRoom({ code }) {
-  return emit('room:leave', { code });
+  return emitWithWait('room:leave', { code }, 35000);
 }
 
 export async function sendAction({ code, action }) {
-  return emit('game:action', { code, action });
+  return emitWithWait('game:action', { code, action }, 35000);
 }
 
 export async function listRooms() {
-  return emit('rooms:list');
+  return emitWithWait('rooms:list', {}, 35000);
 }
 
 // ============================================================
 // v3.16: ПИНГ (RTT через emit → cb) + ping:report
 // ============================================================
 export async function ping() {
+  // FIX: не ждём соединения (пинг — фоновый), но не шлём, если сокет мёртв
+  if (!socket || !socket.connected) return null;
   const start = Date.now();
-  await emit('ping', { ping: 0 });
+  try {
+    await emit('ping', { ping: 0 });
+  } catch (e) {
+    return null;
+  }
   const rtt = Date.now() - start;
-  // v3.16 FIX: отправляем RTT на сервер (fire-and-forget), чтобы другие видели
   try {
     if (socket && socket.connected) {
       socket.emit('ping:report', { ping: rtt }, () => {});
