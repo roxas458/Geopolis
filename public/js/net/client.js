@@ -1,6 +1,6 @@
 // ============================================================
-// WEBSOCKET-КЛИЕНТ (v3.16.1, D+C) — + скорость, + выход, + roleSlot, + nick, + ping
-// FIX: waitForConnection в emit, tryAllTransports, polling fallback, без дублей
+// WEBSOCKET-КЛИЕНТ (v3.16.2, D+C) — + скорость, + выход, + roleSlot, + nick, + ping
+// FIX: polling ПЕРВЫМ (Render), timeout 60s, tryAllTransports
 // ============================================================
 import { io } from 'https://cdn.socket.io/4.7.5/socket.io.esm.min.js';
 
@@ -19,7 +19,6 @@ let listeners = {
 };
 
 export function connect() {
-  // FIX: если socket уже создан, но не connected — пробуем переподключиться
   if (socket) {
     if (!socket.connected) {
       try { socket.connect(); } catch (e) { /* ignore */ }
@@ -28,18 +27,18 @@ export function connect() {
   }
 
   socket = io({
-    // FIX: tryAllTransports — Socket.IO 4.7+ сам откатится на polling,
-    // если websocket не поднялся (Render Free / прокси).
-    transports: ['websocket', 'polling'],
+    // FIX: polling ПЕРВЫМ — Render-прокси пропускает polling всегда,
+    // затем апгрейд до websocket. Если апгрейд не удался — polling остаётся.
+    transports: ['polling', 'websocket'],
     tryAllTransports: true,
+    upgrade: true,
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
-    timeout: 20000,
+    timeout: 60000, // Render Free просыпается до 60 сек
   });
 
-  // FIX: обработчики навешиваем один раз, чтобы не дублировать события
   if (initialized) return socket;
   initialized = true;
 
@@ -93,8 +92,8 @@ export function getSocket() {
   return socket;
 }
 
-// === ДОЖДАТЬСЯ СОЕДИНЕНИЯ (для emit без гонок) ===
-export function waitForConnection(timeoutMs = 35000) {
+// === ДОЖДАТЬСЯ СОЕДИНЕНИЯ ===
+export function waitForConnection(timeoutMs = 60000) {
   return new Promise((resolve, reject) => {
     if (socket && socket.connected) return resolve(socket);
     if (!socket) connect();
@@ -134,8 +133,6 @@ function emit(event, data) {
       resolve(response);
     };
 
-    // FIX: КРИТИЧНО — всегда передаём data (даже {}), иначе Socket.IO
-    // отдаёт серверу (cb) вместо (data, cb) → "cb is not a function".
     const payload = (data === undefined || data === null) ? {} : data;
 
     try {
@@ -148,7 +145,7 @@ function emit(event, data) {
 }
 
 // FIX: emit с ожиданием соединения — для холодного Render / быстрого клика на ПК
-async function emitWithWait(event, data, timeoutMs = 35000) {
+async function emitWithWait(event, data, timeoutMs = 60000) {
   if (!socket) connect();
   if (socket && !socket.connected) {
     await waitForConnection(timeoutMs);
@@ -207,58 +204,56 @@ export function setNick(nick) {
 
 // === API ===
 export async function createRoom() {
-  // FIX: ждём соединения — иначе на ПК при быстром клике «Нет соединения»
-  return emitWithWait('room:create', {}, 35000);
+  return emitWithWait('room:create', {}, 60000);
 }
 
 export async function joinRoom(code) {
-  return emitWithWait('room:join', { code }, 35000);
+  return emitWithWait('room:join', { code }, 60000);
 }
 
 export async function pickCountry({ code, playerId, countryName, personName, personId, role, roleSlot, nick }) {
   return emitWithWait('room:pickCountry', {
     code, playerId, countryName, personName, personId, role, roleSlot,
     nick: nick || getNick() || 'Игрок',
-  }, 35000);
+  }, 60000);
 }
 
 export async function setReady({ code, ready }) {
-  return emitWithWait('room:ready', { code, ready }, 35000);
+  return emitWithWait('room:ready', { code, ready }, 60000);
 }
 
 export async function startRoom({ code }) {
-  return emitWithWait('room:start', { code }, 35000);
+  return emitWithWait('room:start', { code }, 60000);
 }
 
 export async function pauseRoom({ code }) {
-  return emitWithWait('room:pause', { code }, 35000);
+  return emitWithWait('room:pause', { code }, 60000);
 }
 
 export async function resumeRoom({ code }) {
-  return emitWithWait('room:resume', { code }, 35000);
+  return emitWithWait('room:resume', { code }, 60000);
 }
 
 export async function setSpeed({ code, speed }) {
-  return emitWithWait('room:speed', { code, speed }, 35000);
+  return emitWithWait('room:speed', { code, speed }, 60000);
 }
 
 export async function leaveRoom({ code }) {
-  return emitWithWait('room:leave', { code }, 35000);
+  return emitWithWait('room:leave', { code }, 60000);
 }
 
 export async function sendAction({ code, action }) {
-  return emitWithWait('game:action', { code, action }, 35000);
+  return emitWithWait('game:action', { code, action }, 60000);
 }
 
 export async function listRooms() {
-  return emitWithWait('rooms:list', {}, 35000);
+  return emitWithWait('rooms:list', {}, 60000);
 }
 
 // ============================================================
 // v3.16: ПИНГ (RTT через emit → cb) + ping:report
 // ============================================================
 export async function ping() {
-  // FIX: не ждём соединения (пинг — фоновый), но не шлём, если сокет мёртв
   if (!socket || !socket.connected) return null;
   const start = Date.now();
   try {
